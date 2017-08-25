@@ -237,7 +237,11 @@ def read_messages(config, status):
       lines = []
       for relnum, absnum in enumerate(range(first + 1, last + 1)):
         print('Getting message %d of %d for %s' % (relnum, no_messages, g), end='')
-        resp, info = s.article(absnum)
+        try:
+            resp, info = s.article(absnum)
+        except nntplib.NNTPError:
+            print(' ... not found.')
+            continue
         lines.append(make_mbox_header(info.message_id))
         lines.extend([ m.decode('utf-8', errors='ignore') for m in info.lines])
         print('.')

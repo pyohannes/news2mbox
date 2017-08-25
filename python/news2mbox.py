@@ -182,7 +182,7 @@ def read_status(statusfile):
 
   if os.path.exists(statusfile):
     try:
-      with open(statusfile, 'rb') as f:
+      with open(statusfile, 'r') as f:
         status = json.load(f)
 
       if not isinstance(status, dict):
@@ -234,14 +234,15 @@ def read_messages(config, status):
       first = max(status.get(g, 0), last-200)
       no_messages = last - first
 
-      for relnum, absnum in range(first + 1, last + 1):
+      lines = []
+      for relnum, absnum in enumerate(range(first + 1, last + 1)):
         print('Getting message %d of %d for %s' % (relnum, no_messages, g), end='')
         resp, info = s.article(absnum)
         lines.append(make_mbox_header(info.message_id))
         lines.extend([ m.decode('utf-8', errors='ignore') for m in info.lines])
         print('.')
     
-      with open(os.path.join(outdir, g), 'a') as f:
+      with open(os.path.join(config['outdir'], g), 'a') as f:
         for line in lines:
           f.write(line)
           f.write('\n')
@@ -293,14 +294,13 @@ if __name__ == '__main__':
   try:
     for config in configs:
 
-      if not 'outdir' in config:
-        config['outdir'] = '$HOME/news'
+      config['outdir'] = os.path.expandvars(
+              config.get('outdir', '$HOME/news'))
       if not 'ssl' in config:
         config['ssl'] = True
-      os.path.expandvars(config['outdir'])
 
       read_messages(config, status)
-  except:
+  finally:
     write_status(statusfile, status)
 #```
 # \end{document}

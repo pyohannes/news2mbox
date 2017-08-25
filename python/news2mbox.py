@@ -176,46 +176,77 @@ def read_config(cfg):
 
 #```
 #  \section{Status file - \tc{status.json}}
+#
+#  The status file \tc{status.json} holds a dictionary that contains the number
+#  of the last obtained message for all configured news groups. This file is
+#  not supposed to be edited by the user.
+
+#  \begin{table}[h]
+#   \center
+#   {\it
+#   \begin{tabular}{llll}
+#    \{ & ``comp.lang.c'' & : & 12496, \\
+#     & ``comp.lang.scheme''   & : & 188, \\
+#     & ``comp.lang.python''   & : & 8638 \} \\
+#   \end{tabular}
+#   }
+#   \caption{A sample status file}
+#  \end{table}
+#
+#  The function \tc{read\_status} reads a status file, verifies the content and
+#  returns the data as a dictionary holding newsgroup names as keys and integer 
+#  message numbers as data.
 #```
 def read_status(statusfile):
-  status = {}
-
-  if os.path.exists(statusfile):
-    try:
-      with open(statusfile, 'r') as f:
-        status = json.load(f)
-
-      if not isinstance(status, dict):
-        raise SyntaxError(
-          'Error reading "%s": root must be a dict' % statusfile)
-      for k, v in status.items():
-        if not isinstance(k, str):
-          raise SyntaxError(
-            'Error reading "%s": invalid format of key %s' % (
-              statusfile, k))
-        if not isinstance(v, int):
-          raise SyntaxError(
-            'Error reading "%s": invalid format of value %s' % (
-              statusfile, v))
-    except: pass
+#```
+#  The file is opened and its JSON content is parsed.
+#```
+  try:
+    with open(statusfile, 'r') as f:
+      status = json.load(f)
+#```
+#  Then the structure of the data is verified: the root object must be a
+#  dictionary, all its keys must be strings and all its values must be 
+#  integers.
+#```
+    if not isinstance(status, dict):
+      raise SyntaxError()
+    for k, v in status.items():
+      if not isinstance(k, str):
+        raise SyntaxError()
+      if not isinstance(v, int):
+        raise SyntaxError()
+#```
+#  In case the file does not exists, cannot be read or parsed or its data
+#  cannot be verified an empty dictionary is returned.
+#```
+  except:
+    status = {}
 
   return status
 
-
+#```
+#  Writing the status file is very straight forward. As the status data is
+#  handled internally its integrity can be assumed. So the status data simply
+#  needs to be dumped as serialized JSON data into the file:
+#```
 def write_status(statusfile, status):
   with open(statusfile, 'w') as f:
     json.dump(status, f)
-
-
 #```
 #  \section{Conversion to the mbox format}
+#
+#  Newsgroups messages can be stored \ti{mbox} mailboxes as is, they just need
+#  to be prepended with a proper \ti{mbox} header line. This header line
+#  consists of the string \ti{``From''}, followed by the message id and a time
+#  stamp. The function \tc{make\_mbox\_header} constructs and returns this
+#  header line. The string is encoded, as subsequently all \ti{mbox} files and
+#  newsgroup messages are never decoded and treated as binary data.
 #```
 def make_mbox_header(message_id):
-  return 'From %s %s' % (
+  return ('From %s %s' % (
     message_id.strip('<>'), 
-    time.strftime('%a %b %e %H:%M:%S %Z %Y'))
-
-
+    time.strftime('%a %b %e %H:%M:%S %Z %Y'))).encode()
 #```
 #  \section{Reading messages from the server}
 #```
@@ -235,7 +266,7 @@ def read_messages(config, status):
       no_messages = last - first
 
       lines = []
-      for relnum, absnum in enumerate(range(first + 1, last + 1)):
+      for relnum, absnum in enumerate(range(first + 1, last + 1), 1):
         print('Getting message %d of %d for %s' % (relnum, no_messages, g), end='')
         try:
             resp, info = s.article(absnum)
@@ -243,13 +274,14 @@ def read_messages(config, status):
             print(' ... not found.')
             continue
         lines.append(make_mbox_header(info.message_id))
-        lines.extend([ m.decode('utf-8', errors='ignore') for m in info.lines])
+        #lines.extend([ m.decode('utf-8', errors='ignore') for m in info.lines])
+        lines.extend(info.lines)
         print('.')
     
-      with open(os.path.join(config['outdir'], g), 'a') as f:
+      with open(os.path.join(config['outdir'], g), 'ab') as f:
         for line in lines:
           f.write(line)
-          f.write('\n')
+          f.write('\n'.encode())
 
       status[g] = last
   finally:

@@ -1,11 +1,11 @@
 news2mbox
 =========
 
-*news2mbox* fetches and stores newsgroups message from NNTP servers for offline
-reading. Message are stored in mailboxes of the *mbox* format.
+*news2mbox* fetches and stores newsgroups articles from NNTP servers for offline
+reading. Articles are stored in mailboxes of the *mbox* format.
 
 Messages are fetched cumulatively, with each subsequent call of *news2mbox*
-only new messages are fetched. 
+only new articles are fetched. 
 
 
 Requirements

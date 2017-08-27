@@ -24,12 +24,12 @@
 #  \maketitle
 #  \section{Introduction}
 #
-#   \ti{news2mbox} is a program that fetches newsgroup messages from NNTP
-#   servers and writes the messages to mailboxes of the \ti{mbox} format for
+#   \ti{news2mbox} is a program that fetches newsgroup articles from NNTP
+#   servers and writes those articles to mailboxes of the \ti{mbox} format for
 #   offline reading with MUAs like \ti{mutt}.
 #
-#   Messages are fetched cumulatively, with each subsequent call of
-#   \ti{news2mbox} only new messages are fetched.
+#   Articles are fetched cumulatively, with each subsequent call of
+#   \ti{news2mbox} only new articles are fetched.
 #
 #  \section{Dependencies}
 #```
@@ -45,8 +45,8 @@ import argparse
 import nntplib
 #```
 #   \tc{nntplib} is at the core of \ti{news2mbox}. This module of the standard
-#   Python library is used to connect to NNTP servers, to fetch messages and
-#   message meta information.
+#   Python library is used to connect to NNTP servers, to fetch articles and
+#   article meta information.
 #```
 import json
 #```
@@ -63,16 +63,17 @@ import sys
 import time
 #```
 #   The \tc{os} and \tc{sys} module are needed for obvious reasons, the 
-#   \tc{time} module to format time stamps used in converting messages to the 
+#   \tc{time} module to format time stamps used in converting articles to the 
 #   \ti{mbox} format.\newline
 #
 #
 # \section{Configuration and status files}
 #
 # \subsection{\tc{config.json}}
+# \label{sec:readconfigs}
 #
 #  The main configuration file \tc{config.json} contains a list of all news
-#  servers with login data and a list of groups for which messages should be
+#  servers with login data and a list of groups for which articles should be
 #  obtained.
 #
 #   \begin{table}[h]
@@ -143,7 +144,8 @@ def read_config(cfg):
     if not 'groups' in s:
       raise SyntaxError('"groups" missing in configuration %s' % s)
 #```
-#   \item The value for \ti{groups} must be a list of strings.
+#   \item The value for \ti{groups} must be a list of strings. The value of
+#   \ti{ssl} must be a boolean.
 #```
     for key, value in s.items():
       if key == 'groups':
@@ -176,9 +178,10 @@ def read_config(cfg):
 
 #```
 #  \section{Status file - \tc{status.json}}
+#  \label{sec:readstatus}
 #
 #  The status file \tc{status.json} holds a dictionary that contains the number
-#  of the last obtained message for all configured news groups. This file is
+#  of the last obtained article for all configured news groups. This file is
 #  not supposed to be edited by the user.
 
 #  \begin{table}[h]
@@ -195,7 +198,7 @@ def read_config(cfg):
 #
 #  The function \tc{read\_status} reads a status file, verifies the content and
 #  returns the data as a dictionary holding newsgroup names as keys and integer 
-#  message numbers as data.
+#  article numbers as data.
 #```
 def read_status(statusfile):
 #```
@@ -236,65 +239,152 @@ def write_status(statusfile, status):
 #```
 #  \section{Conversion to the mbox format}
 #
-#  Newsgroups messages can be stored \ti{mbox} mailboxes as is, they just need
+#  Newsgroups articles can be stored \ti{mbox} mailboxes as is, they just need
 #  to be prepended with a proper \ti{mbox} header line. This header line
 #  consists of the string \ti{``From''}, followed by the message id and a time
 #  stamp. The function \tc{make\_mbox\_header} constructs and returns this
 #  header line. The string is encoded, as subsequently all \ti{mbox} files and
-#  newsgroup messages are never decoded and treated as binary data.
+#  newsgroup articles are never decoded and treated as binary data.
 #```
 def make_mbox_header(message_id):
   return ('From %s %s' % (
     message_id.strip('<>'), 
     time.strftime('%a %b %e %H:%M:%S %Z %Y'))).encode()
 #```
-#  \section{Reading messages from the server}
+#  \section{Reading articles from the server}
+#  \label{sec:readarticles}
+#
+#  The core task of \ti{news2mbox} is reading messges from the NNTP servers and
+#  writing those message into local mailboxes. These functionality is
+#  encapsulated in the function \tc{read\_articles}. The function gets the
+#  argument \tc{config} which is a dictionary obtained from the configuration 
+#  file \tc{config.json} and holds information about a server with connection
+#  information and a list of news groups. The \tc{status} argument is a
+#  dictionary obtained from the file \tc{status.json} holding information to
+#  identify the last article read for each news group.
 #```
-def read_messages(config, status):
-  print('Connecting to %s ... ' % config['server'], end='')
-  s = nntplib.NNTP(config['server'])
-  if config['ssl']:
-    s.starttls()
-  s.login(user=config.get('user'), password=config.get('password'))
-  print('done.')
+def read_articles(config, status):
+#```
+#  The algorithm works in five steps:
+#  \begin{enumerate}
+#  \item \ti{The connection to the NNTP is established.} The server address,
+#  username and password are taken from the \tc{config} dictionary. Username
+#  and password are optional and can therefore be \tc{None}. Depending on the 
+#  configuration an SSL connection is established.
+#```
+  with nntplib.NNTP(config['server']) as s:
+    if config['ssl']:
+      s.starttls()
+    s.login(user=config.get('user'), password=config.get('password'))
 
-  try:
+#```
+#  The following steps are done for each news group configured.
+#```
     for g in config['groups']:
+#```
+#  \item \ti{The range of article numbers to be read is determined.} For this 
+#  purpose, the last available article number is obtained from the server.
+#```
       resp, count, first, last, name = s.group(g)
       last = int(last)
-      first = max(status.get(g, 0), last-200)
-      no_messages = last - first
+#```
+#  The number of the first article to be read is set to the number of the last 
+#  article for this news group. This information is obtained from the status
+#  dictionary. The number is set to 0 if no status information is available for
+#  this group. As a hard coded limit, at most 200 articles can be read, so the 
+#  upper limit for the number of the first article is \ti{last - 200}. One is
+#  added to obtain the number of the first unread articles. This turns the
+#  default 0 into 1, as by the standard article numbers start with 1.
+#```
+      first = max(status.get(g, 0), last-200) + 1
+#```
+#   Calculating the number of all articles that will be read is trivial. This
+#   number is used to print status information.
+#```
+      no_articles = last - first + 1
+#```
+#  The status information printed is modeled after the output of the famous
+#  \ti{fetchmail} utility.
+#```
+      if no_articles:
+        print('%d articles for %s at %s.' % 
+          (no_articles, g, config['server']))
+      else:
+        print('%s: No new articles for %s at %s' % 
+          (PROGRAM, g, config['server']))
 
+#```
+#  \item \ti{Articles are read from the server.} The articles are stored line
+#  wise in a list of lines.
+#```
       lines = []
-      for relnum, absnum in enumerate(range(first + 1, last + 1), 1):
-        print('Getting message %d of %d for %s' % (relnum, no_messages, g), end='')
+#```
+#  The main loop reading articles loops over two values: \tc{relnum} denotes
+#  the relative number of the article, starting with 1, \tc{absnum} denots the
+#  article number as known to the server, from \tc{first} to \tc{last}.
+#```
+      for relnum, absnum in enumerate(range(first, last + 1), 1):
+#```
+#  It is then tried to read a article from the server. If this fails, the
+#  status information line is ended with the string \ti{not found} and the next
+#  article number is processed.
+#```
+        print('reading article %s: %d of %d ' % 
+          (g, relnum, no_articles), end='')
         try:
             resp, info = s.article(absnum)
         except nntplib.NNTPError:
-            print(' ... not found.')
+            print('not found.')
             continue
+#```
+#  If a article is read, first a header for this article is appended to the
+#  list of lines. Then the lines of the article are stored as is and the status
+#  line is ended with the string \ti{flushed}.
+#
+#  Here it is to be noted that all article lines obtained via the NNTP server
+#  are handled as byte sequences and are never decoded.
+#```
         lines.append(make_mbox_header(info.message_id))
-        #lines.extend([ m.decode('utf-8', errors='ignore') for m in info.lines])
         lines.extend(info.lines)
-        print('.')
-    
+        print('flushed')
+#```
+#  \item \ti{The mailbox file is written.} Then all the lines are appended to 
+#  the mailbox file in the destined output directory. For performance reasons, 
+#  this is done in a verbose \tc{for} loop to avoid all string concantenation.
+#```
       with open(os.path.join(config['outdir'], g), 'ab') as f:
         for line in lines:
           f.write(line)
           f.write('\n'.encode())
 
-      status[g] = last
-  finally:
-    s.quit()
-
 #```
+#  \item \ti{The status information is updated.} The entry for this newsgroup in 
+#  the status dictionary set to the number of the last article that was read
+#  for this group.
+#```
+      status[g] = last
+#```
+#  \end{enumerate}
+#
 #  \section{Program invocation and usage}
 #
 #  \subsection{Command line arguments}
+#  \label{sec:argparser}
+#
+#  The program name and the program version are set here.
 #```
 PROGRAM = 'news2mbox'
 VERSION = '0.1'
-
+#```
+#  The function \tc{parse\_arguments} creates an argument parser and parses
+#  command line arguments. Currently
+#  three arguments are supported: \tc{-c} for specifing a configuration
+#  directory, \tc{--version} for printing version information and the
+#  \tc{--help} provided by the \tc{argparse} module.\newline
+#
+#  Here it is to be noted that the configuration directory is set to the
+#  default value \tc{\$HOME/.news2box} if none is given by the user.
+#```
 def parse_arguments():
   parser = argparse.ArgumentParser(prog=PROGRAM)
 
@@ -309,34 +399,80 @@ def parse_arguments():
     help='Display version information')
   
   return parser.parse_args()
-
 #```
 #  \subsection{Main program loop}
 #```
 if __name__ == '__main__':      
-                                     
+#```
+#  The main program involves four steps:
+#
+#  \begin{enumerate}
+#   \item \ti{Arguments are parsed.} The parsing is done by the function
+#   \tc{parse\_arguments} described in section \ref{sec:argparser}. If the
+#   version argument is given, the version information is printed and then the
+#   program exits.
+#```
   args = parse_arguments()
 
   if args.version:
     print('This is %s version %s' % (PROGRAM, VERSION))
     sys.exit(0)
-
+#```
+#  \item \ti{Status and configuration files are read.} In this step paths to
+#  the status and configuration file are created. The files are located in the
+#  configuration directory, the status file is called \tc{status.json} and  
+#  the configuration file is called \tc{config.json}. \newline
+#
+#  The files are then read via the functions \tc{read\_status} which is
+#  described in section \ref{sec:readstatus} and \tc{read\_configs} which is
+#  described in section \ref{sec:readconfigs}. 
+#```
   statusfile = os.path.join(args.configdir, 'status.json')
   configfile = os.path.join(args.configdir, 'config.json')
-
   status = read_status(statusfile)
   configs = read_config(configfile)
-
+#```
+#  \item \ti{Read articles for each server.} Then follows the loop over the
+#  list of server configurations.
+#```
   try:
     for config in configs:
-
+#```
+#  Here some default configuration values are set. If not output directory is
+#  specified in the configuration, it is set to \tc{\$HOME/news}. Environment
+#  variables used in this configuration property are replaced by their values.
+#```
       config['outdir'] = os.path.expandvars(
               config.get('outdir', '$HOME/news'))
+#```
+#  SSL usage is turned on if no other information is specified in the
+#  configuration.
+#```
       if not 'ssl' in config:
         config['ssl'] = True
-
-      read_messages(config, status)
+#```
+#  Finally the articles for the configuration are read via the function
+#  \tc{read\_articles} described in section \ref{sec:readarticles}.
+#```
+      read_articles(config, status)
+#```
+#  \item \ti{Write status information.} The function \tc{read\_message} updates
+#  the information in the \tc{status} dictionary. This information is written
+#  back into the status file for the use by future invocations of 
+#  \ti{news2mbox}. This is done via the function \tc{write\_status} describes
+#  in section \ref{sec:readstatus}.
+#```
   finally:
     write_status(statusfile, status)
 #```
+#  \end{enumerate}
+#
+# \section{References}
+#
+#  \tc{https://docs.python.org/3/} offers high quality documentation for all
+#  Python modules used.\newline
+#
+#  At \tc{https://tools.ietf.org/html/rfc3977} a full specification of the NNTP
+#  protocol can be found.
+
 # \end{document}
